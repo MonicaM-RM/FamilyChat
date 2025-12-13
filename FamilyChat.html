@@ -999,6 +999,63 @@
         let messagesListener = null;
         let groupMessagesListener = null;
         let usersListener = null;
+        let lastMessageTimestamp = null;
+        let lastGroupMessageTimestamp = null;
+        let usersCache = {};
+
+        // ========== NOTIFICACIONES ==========
+        
+        // Pedir permiso para notificaciones
+        async function requestNotificationPermission() {
+            if (!('Notification' in window)) {
+                console.log('Este navegador no soporta notificaciones');
+                return false;
+            }
+            
+            if (Notification.permission === 'granted') {
+                return true;
+            }
+            
+            if (Notification.permission !== 'denied') {
+                const permission = await Notification.requestPermission();
+                return permission === 'granted';
+            }
+            
+            return false;
+        }
+
+        // Mostrar notificación
+        function showNotification(title, body, tag) {
+            if (Notification.permission !== 'granted') return;
+            
+            // No mostrar si la app está en primer plano y visible
+            if (document.visibilityState === 'visible') return;
+            
+            const notification = new Notification(title, {
+                body: body,
+                icon: 'icon-192.png',
+                badge: 'icon-192.png',
+                tag: tag, // Evita notificaciones duplicadas del mismo chat
+                renotify: true,
+                vibrate: [200, 100, 200]
+            });
+            
+            notification.onclick = function() {
+                window.focus();
+                notification.close();
+            };
+        }
+
+        // Cargar caché de usuarios para nombres en notificaciones
+        async function loadUsersCache() {
+            const snapshot = await usersRef.once('value');
+            if (snapshot.exists()) {
+                snapshot.forEach((child) => {
+                    const user = child.val();
+                    usersCache[user.id] = user;
+                });
+            }
+        }
 
         // Initialize
         function init() {
@@ -1251,6 +1308,12 @@
             document.getElementById('chatApp').style.display = 'flex';
             document.getElementById('currentUserName').textContent = currentUser.name;
             
+            // Pedir permiso de notificaciones
+            requestNotificationPermission();
+            
+            // Cargar caché de usuarios
+            loadUsersCache();
+            
             // Set up real-time listeners
             setupUsersListener();
             setupMessagesListener();
@@ -1270,6 +1333,41 @@
                 if (selectedChat && currentTab === 'private') {
                     loadMessages(snapshot);
                 }
+                
+                // Detectar mensajes nuevos para notificaciones
+                if (snapshot.exists() && lastMessageTimestamp !== null) {
+                    snapshot.forEach((child) => {
+                        const msg = child.val();
+                        const msgTime = new Date(msg.timestamp).getTime();
+                        
+                        // Si es un mensaje nuevo para mí (no enviado por mí)
+                        if (msgTime > lastMessageTimestamp && 
+                            msg.to === currentUser.id && 
+                            msg.from !== currentUser.id) {
+                            
+                            const sender = usersCache[msg.from];
+                            const senderName = sender ? sender.name : 'Alguien';
+                            showNotification(
+                                senderName,
+                                msg.text,
+                                'private-' + msg.from
+                            );
+                        }
+                    });
+                }
+                
+                // Actualizar timestamp del último mensaje
+                if (snapshot.exists()) {
+                    let maxTime = 0;
+                    snapshot.forEach((child) => {
+                        const msgTime = new Date(child.val().timestamp).getTime();
+                        if (msgTime > maxTime) maxTime = msgTime;
+                    });
+                    if (maxTime > 0) lastMessageTimestamp = maxTime;
+                } else if (lastMessageTimestamp === null) {
+                    lastMessageTimestamp = Date.now();
+                }
+                
                 // Update unread badges
                 usersRef.once('value').then(usersSnapshot => loadContacts(usersSnapshot));
             });
@@ -1280,6 +1378,39 @@
             groupMessagesListener = groupMessagesRef.on('value', (snapshot) => {
                 if (currentTab === 'group') {
                     loadGroupMessages(snapshot);
+                }
+                
+                // Detectar mensajes nuevos del grupo para notificaciones
+                if (snapshot.exists() && lastGroupMessageTimestamp !== null) {
+                    snapshot.forEach((child) => {
+                        const msg = child.val();
+                        const msgTime = new Date(msg.timestamp).getTime();
+                        
+                        // Si es un mensaje nuevo no enviado por mí
+                        if (msgTime > lastGroupMessageTimestamp && 
+                            msg.from !== currentUser.id) {
+                            
+                            const sender = usersCache[msg.from];
+                            const senderName = sender ? sender.name : 'Alguien';
+                            showNotification(
+                                'Grupo Familiar',
+                                senderName + ': ' + msg.text,
+                                'group'
+                            );
+                        }
+                    });
+                }
+                
+                // Actualizar timestamp del último mensaje del grupo
+                if (snapshot.exists()) {
+                    let maxTime = 0;
+                    snapshot.forEach((child) => {
+                        const msgTime = new Date(child.val().timestamp).getTime();
+                        if (msgTime > maxTime) maxTime = msgTime;
+                    });
+                    if (maxTime > 0) lastGroupMessageTimestamp = maxTime;
+                } else if (lastGroupMessageTimestamp === null) {
+                    lastGroupMessageTimestamp = Date.now();
                 }
             });
         }
