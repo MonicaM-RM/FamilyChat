@@ -1,59 +1,74 @@
-const CACHE_NAME = 'familychat-v2';
-const urlsToCache = [
-  './',
-  './index.html',
-  './manifest.json',
-  './icon-192.png',
-  './icon-512.png'
-];
+const CACHE_NAME = 'familychat-v3';
 
-// Install Service Worker
+// Install - Activar inmediatamente
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('Cache abierto');
-        return cache.addAll(urlsToCache);
-      })
-  );
   self.skipWaiting();
 });
 
-// Activate Service Worker
+// Activate - Limpiar caches antiguos y tomar control
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
           if (cacheName !== CACHE_NAME) {
-            console.log('Eliminando cache antiguo:', cacheName);
             return caches.delete(cacheName);
           }
         })
       );
+    }).then(() => {
+      return self.clients.claim();
     })
   );
-  self.clients.claim();
 });
 
-// Fetch - Network first, then cache
+// Fetch - Siempre red primero, sin problemas de cache
 self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        // Si la respuesta es válida, la guardamos en cache
-        if (response.status === 200) {
-          const responseClone = response.clone();
-          caches.open(CACHE_NAME)
-            .then((cache) => {
-              cache.put(event.request, responseClone);
-            });
+  if (event.request.url.startsWith(self.location.origin)) {
+    event.respondWith(
+      fetch(event.request)
+        .catch(() => {
+          if (event.request.mode === 'navigate') {
+            return caches.match('./index.html');
+          }
+          return caches.match(event.request);
+        })
+    );
+  }
+});
+
+// Manejar notificaciones desde la página
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
+    const { title, body, tag } = event.data;
+    
+    self.registration.showNotification(title, {
+      body: body,
+      icon: './icon-192.png',
+      badge: './icon-192.png',
+      tag: tag,
+      renotify: true,
+      vibrate: [200, 100, 200],
+      requireInteraction: false
+    });
+  }
+});
+
+// Click en notificación
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then((clientList) => {
+        for (const client of clientList) {
+          if ('focus' in client) {
+            return client.focus();
+          }
         }
-        return response;
-      })
-      .catch(() => {
-        // Si no hay red, buscamos en cache
-        return caches.match(event.request);
+        if (clients.openWindow) {
+          return clients.openWindow('./index.html');
+        }
       })
   );
 });
