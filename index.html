@@ -999,8 +999,6 @@
         let messagesListener = null;
         let groupMessagesListener = null;
         let usersListener = null;
-        let lastMessageTimestamp = null;
-        let lastGroupMessageTimestamp = null;
         let usersCache = {};
         let swRegistration = null;
 
@@ -1340,94 +1338,69 @@
         function setupUsersListener() {
             usersListener = usersRef.on('value', (snapshot) => {
                 loadContacts(snapshot);
+                // Actualizar caché de usuarios
+                if (snapshot.exists()) {
+                    snapshot.forEach((child) => {
+                        const user = child.val();
+                        usersCache[user.id] = user;
+                    });
+                }
             });
         }
 
         // Setup Messages Listener
         function setupMessagesListener() {
+            // Listener principal para actualizar la UI
             messagesListener = messagesRef.on('value', (snapshot) => {
                 if (selectedChat && currentTab === 'private') {
                     loadMessages(snapshot);
                 }
-                
-                // Detectar mensajes nuevos para notificaciones
-                if (snapshot.exists() && lastMessageTimestamp !== null) {
-                    snapshot.forEach((child) => {
-                        const msg = child.val();
-                        const msgTime = new Date(msg.timestamp).getTime();
-                        
-                        // Si es un mensaje nuevo para mí (no enviado por mí)
-                        if (msgTime > lastMessageTimestamp && 
-                            msg.to === currentUser.id && 
-                            msg.from !== currentUser.id) {
-                            
-                            const sender = usersCache[msg.from];
-                            const senderName = sender ? sender.name : 'Alguien';
-                            showNotification(
-                                senderName,
-                                msg.text,
-                                'private-' + msg.from
-                            );
-                        }
-                    });
-                }
-                
-                // Actualizar timestamp del último mensaje
-                if (snapshot.exists()) {
-                    let maxTime = 0;
-                    snapshot.forEach((child) => {
-                        const msgTime = new Date(child.val().timestamp).getTime();
-                        if (msgTime > maxTime) maxTime = msgTime;
-                    });
-                    if (maxTime > 0) lastMessageTimestamp = maxTime;
-                } else if (lastMessageTimestamp === null) {
-                    lastMessageTimestamp = Date.now();
-                }
-                
                 // Update unread badges
                 usersRef.once('value').then(usersSnapshot => loadContacts(usersSnapshot));
+            });
+            
+            // Listener separado para notificaciones (solo mensajes nuevos)
+            messagesRef.orderByChild('timestamp').startAt(Date.now()).on('child_added', (snapshot) => {
+                const msg = snapshot.val();
+                
+                // Solo notificar si el mensaje es para mí y no lo envié yo
+                if (msg.to === currentUser.id && msg.from !== currentUser.id) {
+                    const sender = usersCache[msg.from];
+                    const senderName = sender ? sender.name : 'Alguien';
+                    showNotification(
+                        senderName,
+                        msg.text,
+                        'private-' + msg.from
+                    );
+                }
             });
         }
 
         // Setup Group Messages Listener
         function setupGroupMessagesListener() {
+            // Listener principal para actualizar la UI
             groupMessagesListener = groupMessagesRef.on('value', (snapshot) => {
                 if (currentTab === 'group') {
                     loadGroupMessages(snapshot);
                 }
+            });
+            
+            // Listener separado para notificaciones del grupo (solo mensajes nuevos)
+            groupMessagesRef.orderByChild('timestamp').startAt(Date.now()).on('child_added', (snapshot) => {
+                const msg = snapshot.val();
                 
-                // Detectar mensajes nuevos del grupo para notificaciones
-                if (snapshot.exists() && lastGroupMessageTimestamp !== null) {
-                    snapshot.forEach((child) => {
-                        const msg = child.val();
-                        const msgTime = new Date(msg.timestamp).getTime();
-                        
-                        // Si es un mensaje nuevo no enviado por mí
-                        if (msgTime > lastGroupMessageTimestamp && 
-                            msg.from !== currentUser.id) {
-                            
-                            const sender = usersCache[msg.from];
-                            const senderName = sender ? sender.name : 'Alguien';
-                            showNotification(
-                                'Grupo Familiar',
-                                senderName + ': ' + msg.text,
-                                'group'
-                            );
-                        }
-                    });
+                // Solo notificar si no lo envié yo
+                if (msg.from !== currentUser.id) {
+                    const sender = usersCache[msg.from];
+                    const senderName = sender ? sender.name : 'Alguien';
+                    showNotification(
+                        'Grupo Familiar',
+                        senderName + ': ' + msg.text,
+                        'group'
+                    );
                 }
-                
-                // Actualizar timestamp del último mensaje del grupo
-                if (snapshot.exists()) {
-                    let maxTime = 0;
-                    snapshot.forEach((child) => {
-                        const msgTime = new Date(child.val().timestamp).getTime();
-                        if (msgTime > maxTime) maxTime = msgTime;
-                    });
-                    if (maxTime > 0) lastGroupMessageTimestamp = maxTime;
-                } else if (lastGroupMessageTimestamp === null) {
-                    lastGroupMessageTimestamp = Date.now();
-                }
+            });
+        }
             });
         }
 
