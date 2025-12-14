@@ -1025,13 +1025,16 @@
 
         // Mostrar notificación (usa Service Worker para que funcione en móvil)
         function showNotification(title, body, tag) {
-            if (Notification.permission !== 'granted') return;
+            if (Notification.permission !== 'granted') {
+                console.log('Notificaciones no permitidas');
+                return;
+            }
             
-            // No mostrar si la app está en primer plano y visible
-            if (document.visibilityState === 'visible') return;
+            console.log('Intentando mostrar notificación:', title, body);
             
             // Intentar usar Service Worker (funciona en móvil)
             if (swRegistration && swRegistration.active) {
+                console.log('Usando SW registration');
                 swRegistration.active.postMessage({
                     type: 'SHOW_NOTIFICATION',
                     title: title,
@@ -1039,7 +1042,7 @@
                     tag: tag
                 });
             } else if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-                // Alternativa si tenemos controller
+                console.log('Usando SW controller');
                 navigator.serviceWorker.controller.postMessage({
                     type: 'SHOW_NOTIFICATION',
                     title: title,
@@ -1047,6 +1050,7 @@
                     tag: tag
                 });
             } else {
+                console.log('Usando Notification API directa');
                 // Fallback para navegadores de escritorio
                 try {
                     new Notification(title, {
@@ -1385,13 +1389,21 @@
                 
                 // Solo notificar si el mensaje es para mí y no lo envié yo
                 if (msg.to === currentUser.id && msg.from !== currentUser.id) {
-                    const sender = usersCache[msg.from];
-                    const senderName = sender ? sender.name : 'Alguien';
-                    showNotification(
-                        senderName,
-                        msg.text,
-                        'private-' + msg.from
-                    );
+                    // No notificar si estoy viendo este chat y la app está visible
+                    const isViewingThisChat = selectedChat && 
+                                              selectedChat.id === msg.from && 
+                                              currentTab === 'private' &&
+                                              document.visibilityState === 'visible';
+                    
+                    if (!isViewingThisChat) {
+                        const sender = usersCache[msg.from];
+                        const senderName = sender ? sender.name : 'Alguien';
+                        showNotification(
+                            senderName,
+                            msg.text,
+                            'private-' + msg.from
+                        );
+                    }
                 }
             });
         }
@@ -1411,13 +1423,19 @@
                 
                 // Solo notificar si no lo envié yo
                 if (msg.from !== currentUser.id) {
-                    const sender = usersCache[msg.from];
-                    const senderName = sender ? sender.name : 'Alguien';
-                    showNotification(
-                        'Grupo Familiar',
-                        senderName + ': ' + msg.text,
-                        'group'
-                    );
+                    // No notificar si estoy viendo el grupo y la app está visible
+                    const isViewingGroup = currentTab === 'group' && 
+                                          document.visibilityState === 'visible';
+                    
+                    if (!isViewingGroup) {
+                        const sender = usersCache[msg.from];
+                        const senderName = sender ? sender.name : 'Alguien';
+                        showNotification(
+                            'Grupo Familiar',
+                            senderName + ': ' + msg.text,
+                            'group'
+                        );
+                    }
                 }
             });
         }
