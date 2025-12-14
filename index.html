@@ -1020,8 +1020,29 @@
         let usersListener = null;
         let usersCache = {};
         let swRegistration = null;
-        let notifiedMessages = new Set(); // Mensajes ya notificados en esta sesión
-        let appStartTime = Date.now(); // Tiempo de inicio de la app
+
+        // Cargar mensajes ya notificados de localStorage
+        function getNotifiedMessages() {
+            try {
+                const saved = localStorage.getItem('familychat_notified');
+                return saved ? new Set(JSON.parse(saved)) : new Set();
+            } catch (e) {
+                return new Set();
+            }
+        }
+
+        // Guardar mensaje como notificado
+        function saveNotifiedMessage(msgId) {
+            try {
+                const notified = getNotifiedMessages();
+                notified.add(msgId);
+                // Limitar a últimos 500 mensajes para no llenar localStorage
+                const arr = Array.from(notified).slice(-500);
+                localStorage.setItem('familychat_notified', JSON.stringify(arr));
+            } catch (e) {
+                // Ignorar errores de localStorage
+            }
+        }
 
         // ========== NOTIFICACIONES ==========
         
@@ -1358,13 +1379,10 @@
                 document.getElementById('chatApp').style.display = 'flex';
                 document.getElementById('currentUserName').textContent = currentUser.name;
                 
-                // Set up real-time listeners primero (lo más importante)
+                // Set up real-time listeners (esto también marca mensajes como entregados)
                 setupUsersListener();
                 setupMessagesListener();
                 setupGroupMessagesListener();
-                
-                // Marcar mensajes pendientes como entregados
-                markMessagesAsDelivered();
                 
                 // Pedir permiso de notificaciones después (no bloquea)
                 setTimeout(() => {
@@ -1399,12 +1417,14 @@
                     loadMessages(snapshot);
                 }
                 
+                // Cargar mensajes ya notificados
+                const notifiedMessages = getNotifiedMessages();
+                
                 // Procesar mensajes para notificaciones y estados
                 if (snapshot.exists()) {
                     snapshot.forEach((child) => {
                         const msg = child.val();
                         const msgKey = child.key;
-                        const msgTime = new Date(msg.timestamp).getTime();
                         
                         // Solo procesar mensajes que son para mí y no los envié yo
                         if (msg.to === currentUser.id && msg.from !== currentUser.id) {
@@ -1416,16 +1436,14 @@
                             
                             // Solo notificar si:
                             // 1. El mensaje NO ha sido leído
-                            // 2. El mensaje fue enviado DESPUÉS de que abrí la app
-                            // 3. No lo he notificado antes en esta sesión
+                            // 2. No lo he notificado antes (persistido en localStorage)
                             const shouldNotify = !msg.read && 
                                                  msg.status !== 'read' &&
-                                                 msgTime > appStartTime &&
                                                  !notifiedMessages.has(msgKey);
                             
                             if (shouldNotify) {
-                                // Marcar como notificado
-                                notifiedMessages.add(msgKey);
+                                // Guardar como notificado en localStorage
+                                saveNotifiedMessage(msgKey);
                                 
                                 // No notificar si estoy viendo este chat
                                 const isViewingThisChat = selectedChat && 
@@ -1464,24 +1482,23 @@
                     loadGroupMessages(snapshot);
                 }
                 
+                // Cargar mensajes ya notificados
+                const notifiedMessages = getNotifiedMessages();
+                
                 // Procesar mensajes del grupo para notificaciones
                 if (snapshot.exists()) {
                     snapshot.forEach((child) => {
                         const msg = child.val();
-                        const msgKey = child.key;
-                        const msgTime = new Date(msg.timestamp).getTime();
+                        const msgKey = 'group-' + child.key;
                         
                         // Solo procesar mensajes que no envié yo
                         if (msg.from !== currentUser.id) {
-                            // Solo notificar si:
-                            // 1. El mensaje fue enviado DESPUÉS de que abrí la app
-                            // 2. No lo he notificado antes en esta sesión
-                            const shouldNotify = msgTime > appStartTime &&
-                                                 !notifiedMessages.has('group-' + msgKey);
+                            // Solo notificar si no lo he notificado antes
+                            const shouldNotify = !notifiedMessages.has(msgKey);
                             
                             if (shouldNotify) {
-                                // Marcar como notificado
-                                notifiedMessages.add('group-' + msgKey);
+                                // Guardar como notificado en localStorage
+                                saveNotifiedMessage(msgKey);
                                 
                                 // No notificar si estoy viendo el grupo
                                 const isViewingGroup = currentTab === 'group' && 
@@ -1666,24 +1683,6 @@
                     if (msg.from === userId && msg.to === currentUser.id && !msg.read) {
                         updates[child.key + '/read'] = true;
                         updates[child.key + '/status'] = 'read';
-                    }
-                });
-                if (Object.keys(updates).length > 0) {
-                    await messagesRef.update(updates);
-                }
-            }
-        }
-
-        // Mark messages as delivered (cuando recibo mensajes)
-        async function markMessagesAsDelivered() {
-            const snapshot = await messagesRef.once('value');
-            if (snapshot.exists()) {
-                const updates = {};
-                snapshot.forEach((child) => {
-                    const msg = child.val();
-                    // Si el mensaje es para mí y está en estado 'sent', marcarlo como 'delivered'
-                    if (msg.to === currentUser.id && msg.status === 'sent') {
-                        updates[child.key + '/status'] = 'delivered';
                     }
                 });
                 if (Object.keys(updates).length > 0) {
