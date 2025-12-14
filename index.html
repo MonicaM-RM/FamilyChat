@@ -1020,6 +1020,8 @@
         let usersListener = null;
         let usersCache = {};
         let swRegistration = null;
+        let notifiedMessages = new Set(); // Mensajes ya notificados en esta sesión
+        let appStartTime = Date.now(); // Tiempo de inicio de la app
 
         // ========== NOTIFICACIONES ==========
         
@@ -1045,15 +1047,11 @@
         // Mostrar notificación (usa Service Worker para que funcione en móvil)
         function showNotification(title, body, tag) {
             if (Notification.permission !== 'granted') {
-                console.log('Notificaciones no permitidas');
                 return;
             }
             
-            console.log('Intentando mostrar notificación:', title, body);
-            
             // Intentar usar Service Worker (funciona en móvil)
             if (swRegistration && swRegistration.active) {
-                console.log('Usando SW registration');
                 swRegistration.active.postMessage({
                     type: 'SHOW_NOTIFICATION',
                     title: title,
@@ -1061,7 +1059,6 @@
                     tag: tag
                 });
             } else if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-                console.log('Usando SW controller');
                 navigator.serviceWorker.controller.postMessage({
                     type: 'SHOW_NOTIFICATION',
                     title: title,
@@ -1069,7 +1066,6 @@
                     tag: tag
                 });
             } else {
-                console.log('Usando Notification API directa');
                 // Fallback para navegadores de escritorio
                 try {
                     new Notification(title, {
@@ -1078,7 +1074,7 @@
                         tag: tag
                     });
                 } catch (e) {
-                    console.log('No se pudo mostrar notificación:', e);
+                    // Silenciar error
                 }
             }
         }
@@ -1396,75 +1392,113 @@
 
         // Setup Messages Listener
         function setupMessagesListener() {
-            // Listener principal para actualizar la UI
+            // Listener principal para actualizar la UI y manejar notificaciones
             messagesListener = messagesRef.on('value', (snapshot) => {
+                // Actualizar UI si estamos en un chat
                 if (selectedChat && currentTab === 'private') {
                     loadMessages(snapshot);
                 }
+                
+                // Procesar mensajes para notificaciones y estados
+                if (snapshot.exists()) {
+                    snapshot.forEach((child) => {
+                        const msg = child.val();
+                        const msgKey = child.key;
+                        const msgTime = new Date(msg.timestamp).getTime();
+                        
+                        // Solo procesar mensajes que son para mí y no los envié yo
+                        if (msg.to === currentUser.id && msg.from !== currentUser.id) {
+                            
+                            // Si el mensaje está en estado 'sent', marcarlo como 'delivered'
+                            if (msg.status === 'sent') {
+                                messagesRef.child(msgKey).update({ status: 'delivered' });
+                            }
+                            
+                            // Solo notificar si:
+                            // 1. El mensaje NO ha sido leído
+                            // 2. El mensaje fue enviado DESPUÉS de que abrí la app
+                            // 3. No lo he notificado antes en esta sesión
+                            const shouldNotify = !msg.read && 
+                                                 msg.status !== 'read' &&
+                                                 msgTime > appStartTime &&
+                                                 !notifiedMessages.has(msgKey);
+                            
+                            if (shouldNotify) {
+                                // Marcar como notificado
+                                notifiedMessages.add(msgKey);
+                                
+                                // No notificar si estoy viendo este chat
+                                const isViewingThisChat = selectedChat && 
+                                                          selectedChat.id === msg.from && 
+                                                          currentTab === 'private' &&
+                                                          document.visibilityState === 'visible';
+                                
+                                if (isViewingThisChat) {
+                                    // Marcar como leído directamente
+                                    messagesRef.child(msgKey).update({ status: 'read', read: true });
+                                } else {
+                                    // Mostrar notificación
+                                    const sender = usersCache[msg.from];
+                                    const senderName = sender ? sender.name : 'Alguien';
+                                    showNotification(
+                                        senderName,
+                                        msg.text,
+                                        'private-' + msg.from
+                                    );
+                                }
+                            }
+                        }
+                    });
+                }
+                
                 // Update unread badges
                 usersRef.once('value').then(usersSnapshot => loadContacts(usersSnapshot));
-            });
-            
-            // Listener separado para notificaciones (solo mensajes nuevos)
-            messagesRef.orderByChild('timestamp').startAt(Date.now()).on('child_added', (snapshot) => {
-                const msg = snapshot.val();
-                const msgKey = snapshot.key;
-                
-                // Solo notificar si el mensaje es para mí y no lo envié yo
-                if (msg.to === currentUser.id && msg.from !== currentUser.id) {
-                    // Marcar como entregado inmediatamente
-                    messagesRef.child(msgKey).update({ status: 'delivered' });
-                    
-                    // No notificar si estoy viendo este chat y la app está visible
-                    const isViewingThisChat = selectedChat && 
-                                              selectedChat.id === msg.from && 
-                                              currentTab === 'private' &&
-                                              document.visibilityState === 'visible';
-                    
-                    // Si estoy viendo el chat, marcar como leído también
-                    if (isViewingThisChat) {
-                        messagesRef.child(msgKey).update({ status: 'read', read: true });
-                    } else {
-                        const sender = usersCache[msg.from];
-                        const senderName = sender ? sender.name : 'Alguien';
-                        showNotification(
-                            senderName,
-                            msg.text,
-                            'private-' + msg.from
-                        );
-                    }
-                }
             });
         }
 
         // Setup Group Messages Listener
         function setupGroupMessagesListener() {
-            // Listener principal para actualizar la UI
+            // Listener principal para actualizar la UI y manejar notificaciones
             groupMessagesListener = groupMessagesRef.on('value', (snapshot) => {
                 if (currentTab === 'group') {
                     loadGroupMessages(snapshot);
                 }
-            });
-            
-            // Listener separado para notificaciones del grupo (solo mensajes nuevos)
-            groupMessagesRef.orderByChild('timestamp').startAt(Date.now()).on('child_added', (snapshot) => {
-                const msg = snapshot.val();
                 
-                // Solo notificar si no lo envié yo
-                if (msg.from !== currentUser.id) {
-                    // No notificar si estoy viendo el grupo y la app está visible
-                    const isViewingGroup = currentTab === 'group' && 
-                                          document.visibilityState === 'visible';
-                    
-                    if (!isViewingGroup) {
-                        const sender = usersCache[msg.from];
-                        const senderName = sender ? sender.name : 'Alguien';
-                        showNotification(
-                            'Grupo Familiar',
-                            senderName + ': ' + msg.text,
-                            'group'
-                        );
-                    }
+                // Procesar mensajes del grupo para notificaciones
+                if (snapshot.exists()) {
+                    snapshot.forEach((child) => {
+                        const msg = child.val();
+                        const msgKey = child.key;
+                        const msgTime = new Date(msg.timestamp).getTime();
+                        
+                        // Solo procesar mensajes que no envié yo
+                        if (msg.from !== currentUser.id) {
+                            // Solo notificar si:
+                            // 1. El mensaje fue enviado DESPUÉS de que abrí la app
+                            // 2. No lo he notificado antes en esta sesión
+                            const shouldNotify = msgTime > appStartTime &&
+                                                 !notifiedMessages.has('group-' + msgKey);
+                            
+                            if (shouldNotify) {
+                                // Marcar como notificado
+                                notifiedMessages.add('group-' + msgKey);
+                                
+                                // No notificar si estoy viendo el grupo
+                                const isViewingGroup = currentTab === 'group' && 
+                                                      document.visibilityState === 'visible';
+                                
+                                if (!isViewingGroup) {
+                                    const sender = usersCache[msg.from];
+                                    const senderName = sender ? sender.name : 'Alguien';
+                                    showNotification(
+                                        'Grupo Familiar',
+                                        senderName + ': ' + msg.text,
+                                        'group'
+                                    );
+                                }
+                            }
+                        }
+                    });
                 }
             });
         }
