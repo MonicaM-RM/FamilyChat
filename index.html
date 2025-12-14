@@ -1060,23 +1060,39 @@
             }
         }
 
-        // Cargar caché de usuarios para nombres en notificaciones
-        async function loadUsersCache() {
-            const snapshot = await usersRef.once('value');
-            if (snapshot.exists()) {
-                snapshot.forEach((child) => {
-                    const user = child.val();
-                    usersCache[user.id] = user;
-                });
-            }
-        }
-
         // Initialize
         function init() {
             // Check if user is already logged in (persiste en el dispositivo)
-            const savedUser = localStorage.getItem('familychat_current_user');
-            if (savedUser) {
-                currentUser = JSON.parse(savedUser);
+            try {
+                const savedUser = localStorage.getItem('familychat_current_user');
+                if (savedUser) {
+                    currentUser = JSON.parse(savedUser);
+                    // Verificar que el usuario aún existe en la base de datos
+                    verifyAndShowChat();
+                }
+            } catch (e) {
+                console.error('Error al inicializar:', e);
+                localStorage.removeItem('familychat_current_user');
+            }
+        }
+
+        // Verificar usuario y mostrar chat
+        async function verifyAndShowChat() {
+            try {
+                // Intentar conectar con Firebase con timeout
+                const timeoutPromise = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Timeout')), 10000)
+                );
+                
+                const checkPromise = usersRef.once('value');
+                
+                await Promise.race([checkPromise, timeoutPromise]);
+                
+                // Si llegamos aquí, hay conexión
+                showChatApp();
+            } catch (e) {
+                console.error('Error de conexión:', e);
+                // Mostrar de todos modos, Firebase se reconectará
                 showChatApp();
             }
         }
@@ -1318,20 +1334,24 @@
 
         // Show Chat App
         function showChatApp() {
-            document.getElementById('authContainer').style.display = 'none';
-            document.getElementById('chatApp').style.display = 'flex';
-            document.getElementById('currentUserName').textContent = currentUser.name;
-            
-            // Pedir permiso de notificaciones
-            requestNotificationPermission();
-            
-            // Cargar caché de usuarios
-            loadUsersCache();
-            
-            // Set up real-time listeners
-            setupUsersListener();
-            setupMessagesListener();
-            setupGroupMessagesListener();
+            try {
+                document.getElementById('authContainer').style.display = 'none';
+                document.getElementById('chatApp').style.display = 'flex';
+                document.getElementById('currentUserName').textContent = currentUser.name;
+                
+                // Set up real-time listeners primero (lo más importante)
+                setupUsersListener();
+                setupMessagesListener();
+                setupGroupMessagesListener();
+                
+                // Pedir permiso de notificaciones después (no bloquea)
+                setTimeout(() => {
+                    requestNotificationPermission();
+                }, 1000);
+                
+            } catch (e) {
+                console.error('Error al mostrar chat:', e);
+            }
         }
 
         // Setup Users Listener
@@ -1399,8 +1419,6 @@
                         'group'
                     );
                 }
-            });
-        }
             });
         }
 
@@ -1744,32 +1762,19 @@
             return div.innerHTML;
         }
 
-        // Register Service Worker for PWA
+        // Register Service Worker for PWA (no bloquea la app)
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js')
-                    .then((registration) => {
-                        console.log('Service Worker registrado:', registration.scope);
-                        swRegistration = registration;
-                        
-                        // Esperar a que el SW esté activo
-                        if (registration.active) {
-                            console.log('Service Worker activo');
-                        }
-                        
-                        // Escuchar cuando se actualice
-                        registration.addEventListener('updatefound', () => {
-                            const newWorker = registration.installing;
-                            newWorker.addEventListener('statechange', () => {
-                                if (newWorker.state === 'activated') {
-                                    swRegistration = registration;
-                                }
-                            });
+                setTimeout(() => {
+                    navigator.serviceWorker.register('sw.js')
+                        .then((registration) => {
+                            swRegistration = registration;
+                            console.log('SW registrado');
+                        })
+                        .catch((error) => {
+                            console.log('SW error:', error);
                         });
-                    })
-                    .catch((error) => {
-                        console.log('Error al registrar Service Worker:', error);
-                    });
+                }, 2000); // Esperar 2 segundos para no interferir con la carga
             });
         }
 

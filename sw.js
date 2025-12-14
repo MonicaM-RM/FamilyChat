@@ -1,40 +1,28 @@
-const CACHE_NAME = 'familychat-v3';
+const CACHE_NAME = 'familychat-v4';
 
 // Install - Activar inmediatamente
 self.addEventListener('install', (event) => {
+  console.log('SW: Instalando...');
   self.skipWaiting();
 });
 
-// Activate - Limpiar caches antiguos y tomar control
+// Activate - Tomar control inmediatamente
 self.addEventListener('activate', (event) => {
+  console.log('SW: Activando...');
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName);
-          }
-        })
+        cacheNames.filter(name => name !== CACHE_NAME)
+          .map(name => caches.delete(name))
       );
-    }).then(() => {
-      return self.clients.claim();
-    })
+    }).then(() => self.clients.claim())
   );
 });
 
-// Fetch - Siempre red primero, sin problemas de cache
+// Fetch - Dejar pasar todo sin interceptar (evita problemas de cache)
 self.addEventListener('fetch', (event) => {
-  if (event.request.url.startsWith(self.location.origin)) {
-    event.respondWith(
-      fetch(event.request)
-        .catch(() => {
-          if (event.request.mode === 'navigate') {
-            return caches.match('./index.html');
-          }
-          return caches.match(event.request);
-        })
-    );
-  }
+  // No hacer nada, dejar que el navegador maneje todo normalmente
+  return;
 });
 
 // Manejar notificaciones desde la página
@@ -48,8 +36,7 @@ self.addEventListener('message', (event) => {
       badge: './icon-192.png',
       tag: tag,
       renotify: true,
-      vibrate: [200, 100, 200],
-      requireInteraction: false
+      vibrate: [200, 100, 200]
     });
   }
 });
